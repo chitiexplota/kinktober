@@ -781,18 +781,33 @@ const shipTags = makeTagInput($("#shipInput"));
 
 // ---------- Sending ----------
 const isSheets = () => CONFIG.formEndpoint.includes("script.google.com");
+let lastErr = "";
 async function send(payload){
+  lastErr = "";
   if (!CONFIG.formEndpoint) {
     console.info("No formEndpoint set. Answer saved only in this browser:", payload);
     return true;
   }
-  try {
-    if (isSheets()) {
-      // Google Sheets: send as a GET request and wait for {"ok":true}
-      const res = await fetch(CONFIG.formEndpoint + "?" + new URLSearchParams(payload));
-      const json = await res.json();
-      return !!json.ok;
+  if (isSheets()) {
+    // Google Sheets: send as a GET request and read {"ok":true}
+    const url = CONFIG.formEndpoint + "?" + new URLSearchParams(payload);
+    let res;
+    try {
+      res = await fetch(url, { redirect: "follow" });
+    } catch (err) {
+      // The browser would not let us read Google's reply. Send it anyway without reading it.
+      console.warn("Reading the reply failed, sending blind:", err);
+      try { await fetch(url, { mode: "no-cors" }); return true; }
+      catch (e2) { lastErr = "network"; return false; }
     }
+    let json = null;
+    try { json = await res.json(); } catch {}
+    if (json && json.ok) return true;
+    lastErr = !json ? "reply-" + res.status : (json.vetoes ? "old-script" : (json.error || "not-saved"));
+    console.warn("Google replied:", res.status, json);
+    return false;
+  }
+  try {
     const res = await fetch(CONFIG.formEndpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json", "Accept": "application/json" },
@@ -826,7 +841,7 @@ async function submitWith(form, data, problem, label, onDone){
   btn.disabled = true; btn.textContent = "Sending…";
   const ok = await send(data);
   btn.disabled = false; btn.textContent = label;
-  if (!ok) { err.textContent = "Your response could not be sent. Please try again."; return; }
+  if (!ok) { err.textContent = "Your response could not be sent. Please try again." + (lastErr ? " (" + lastErr + ")" : ""); return; }
   onDone();
 }
 
